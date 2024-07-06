@@ -38,7 +38,7 @@ pub fn gather_characters(
             let mut file = Arc::clone(&file);
             let tx = tx.clone();
 
-            println!("At {i} out of {num_chunks}\r");
+            print!("At {i} out of {num_chunks}\r");
 
             let index_map = Arc::clone(&index_map);
             let acceptable_types = Arc::clone(&acceptable_types);
@@ -55,7 +55,6 @@ pub fn gather_characters(
                     offset_back,
                     offset_front,
                     &index_map,
-                    i,
                 ))
                 .unwrap();
             });
@@ -77,15 +76,12 @@ fn line_process(
     offset_back: isize,
     offset_front: isize,
     index_map: &Arc<HashMap<char, usize>>,
-    location: usize,
 ) -> ArrayBase<OwnedRepr<u64>, Dim<[usize; 3]>> {
     let mut data = Array3::<u64>::zeros((
         acceptable.len(),
         acceptable.len(),
         offset_back as usize + offset_front as usize + 1,
     ));
-    // eprint!("Buffer:\n{:?}", buffer);
-    // eprint!("Acceptable:\n{:?}", acceptable);
 
     if buffer.len() > offset_back as usize + offset_front as usize {
         for (counter, &character) in buffer.iter().enumerate().skip(offset_back as usize) {

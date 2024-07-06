@@ -1,12 +1,12 @@
 use ndarray::{Array3, ArrayBase, Dim, OwnedRepr};
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, Read, Seek, SeekFrom};
 use std::sync::{mpsc, Arc};
 use std::{array, thread};
 
 const BUFFERMAX: usize = 4096 * 4;
-const THREADNUMMBER: u8 = 4;
+const CHUNKSIZE: usize = 4096;
 
 pub fn gather_characters(
     acceptable_types: Vec<char>,
@@ -14,7 +14,9 @@ pub fn gather_characters(
     offset_front: isize,
     file: File,
 ) -> Array3<u64> {
-    let reader = BufReader::new(file);
+    let file_size = file.metadata().expect("Could not read file metadata").len();
+    let num_chunks = (file_size as usize + CHUNKSIZE + 1) / CHUNKSIZE;
+    let file = Arc::new(file);
 
     let index_map: HashMap<char, usize> = acceptable_types
         .iter()
@@ -31,16 +33,22 @@ pub fn gather_characters(
         offset_back as usize + offset_front as usize + 1,
     ));
 
-    for line in reader.lines() {
-        let line = line.expect("Failed to read a line");
+    for i in 0..num_chunks {
+        let mut file = Arc::clone(&file);
+
         let tx = tx.clone();
-        let vec_u8: Vec<char> = line.chars().collect();
 
         let index_map = Arc::clone(&index_map);
         let acceptable_types = Arc::clone(&acceptable_types);
         thread::spawn(move || {
+            let mut chunk = vec![0; CHUNKSIZE.min(file_size as usize - i * CHUNKSIZE)];
+
+            file.seek(SeekFrom::Start((i * CHUNKSIZE) as u64)).unwrap();
+            let _amount = file.read(&mut chunk).unwrap();
+            let chunk = chunk.iter().map(|c| *c as char).collect();
+
             tx.send(line_process(
-                &vec_u8,
+                &chunk,
                 &acceptable_types,
                 offset_back,
                 offset_front,
@@ -69,6 +77,8 @@ fn line_process(
         acceptable.len(),
         offset_back as usize + offset_front as usize + 1,
     ));
+    // eprint!("Buffer:\n{:?}", buffer);
+    // eprint!("Acceptable:\n{:?}", acceptable);
 
     if buffer.len() > offset_back as usize + offset_front as usize {
         for (counter, &character) in buffer.iter().enumerate().skip(offset_back as usize) {
@@ -91,5 +101,6 @@ fn line_process(
             }
         }
     }
+    //println!("Thread finished with:\n{:#?}", &data);
     return data;
 }

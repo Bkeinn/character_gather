@@ -25,6 +25,8 @@ fn main() -> hdf5::Result<()> {
     let args = Args::parse();
     let file = StdFile::open(args.input).expect("Could not open input file");
 
+    println!("Accepted types are:\n{:?}", args.acceptable_types);
+
     let hdf5_file = File::create(args.output).expect("Could not create file");
     let dataset = hdf5_file
         .new_dataset::<u64>()

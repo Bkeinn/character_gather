@@ -25,13 +25,6 @@ fn main() -> hdf5::Result<()> {
     let args = Args::parse();
     let file = StdFile::open(args.input).expect("Could not open input file");
 
-    let data = gather_characters(
-        &args.acceptable_types,
-        args.offset_back,
-        args.offset_front,
-        file,
-    );
-
     let hdf5_file = File::create(args.output).expect("Could not create file");
     let dataset = hdf5_file
         .new_dataset::<u64>()
@@ -42,6 +35,14 @@ fn main() -> hdf5::Result<()> {
         ))
         .create("results")
         .expect("could not create base");
+
+    let data = gather_characters(
+        args.acceptable_types,
+        args.offset_back,
+        args.offset_front,
+        file,
+    );
+
     dataset.write(&data).expect("Could not write the fiel");
     Ok(())
 }

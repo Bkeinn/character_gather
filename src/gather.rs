@@ -89,11 +89,21 @@ fn line_process(
                         if suround_char_index >= 0 && (suround_char_index as usize) < buffer.len() {
                             let found_char = buffer[suround_char_index as usize];
                             if acceptable.contains(&found_char) {
-                                data.get_mut((
+                                let point = data.get_mut((
                                     *index_map.get(&character).unwrap(),
                                     *index_map.get(&found_char).unwrap(),
                                     (offset + offset_back) as usize,
                                 ));
+
+                                match point {
+                                    Some(point) => *point += 1,
+                                    None => eprintln!(
+                                        "data at point {}|{}|{} is not accessible",
+                                        index_map.get(&character).unwrap(),
+                                        index_map.get(&found_char).unwrap(),
+                                        offset as usize + offset_back as usize
+                                    ),
+                                }
                             }
                         }
                     }

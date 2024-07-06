@@ -92,7 +92,7 @@ fn line_process(
                                 data.get_mut((
                                     *index_map.get(&character).unwrap(),
                                     *index_map.get(&found_char).unwrap(),
-                                    offset as usize + offset_back as usize,
+                                    (offset + offset_back) as usize,
                                 ));
                             }
                         }

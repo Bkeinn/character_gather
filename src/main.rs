@@ -3,6 +3,7 @@ use gather::gather_characters;
 use hdf5::File;
 use std::fs::File as StdFile;
 mod gather;
+mod threading;
 
 #[derive(Parser, Debug)]
 #[command(name = "Character Gather")]

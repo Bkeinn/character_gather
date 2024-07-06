@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::sync::{mpsc, Arc};
-use std::{array, thread};
+use std::thread;
 
 const BUFFERMAX: usize = 4096 * 4;
 const CHUNKSIZE: usize = 4096;
@@ -33,35 +33,41 @@ pub fn gather_characters(
         offset_back as usize + offset_front as usize + 1,
     ));
 
-    for i in 0..num_chunks {
-        let mut file = Arc::clone(&file);
+    let thread_spawner = thread::spawn(move || {
+        for i in 0..num_chunks {
+            let mut file = Arc::clone(&file);
+            let tx = tx.clone();
 
-        let tx = tx.clone();
+            println!("At {i} out of {num_chunks}\r");
 
-        let index_map = Arc::clone(&index_map);
-        let acceptable_types = Arc::clone(&acceptable_types);
-        thread::spawn(move || {
-            let mut chunk = vec![0; CHUNKSIZE.min(file_size as usize - i * CHUNKSIZE)];
+            let index_map = Arc::clone(&index_map);
+            let acceptable_types = Arc::clone(&acceptable_types);
+            thread::spawn(move || {
+                let mut chunk = vec![0; CHUNKSIZE.min(file_size as usize - i * CHUNKSIZE)];
 
-            file.seek(SeekFrom::Start((i * CHUNKSIZE) as u64)).unwrap();
-            let _amount = file.read(&mut chunk).unwrap();
-            let chunk = chunk.iter().map(|c| *c as char).collect();
+                file.seek(SeekFrom::Start((i * CHUNKSIZE) as u64)).unwrap();
+                let _amount = file.read(&mut chunk).unwrap();
+                let chunk = chunk.iter().map(|c| *c as char).collect();
 
-            tx.send(line_process(
-                &chunk,
-                &acceptable_types,
-                offset_back,
-                offset_front,
-                &index_map,
-            ))
-        });
-    }
+                tx.send(line_process(
+                    &chunk,
+                    &acceptable_types,
+                    offset_back,
+                    offset_front,
+                    &index_map,
+                    i,
+                ))
+                .unwrap();
+            });
+        }
+    });
 
-    drop(tx);
+    // drop(tx);
 
     for received in rx {
         final_sum += &received;
     }
+    thread_spawner.join().unwrap();
     return final_sum;
 }
 
@@ -71,6 +77,7 @@ fn line_process(
     offset_back: isize,
     offset_front: isize,
     index_map: &Arc<HashMap<char, usize>>,
+    location: usize,
 ) -> ArrayBase<OwnedRepr<u64>, Dim<[usize; 3]>> {
     let mut data = Array3::<u64>::zeros((
         acceptable.len(),
@@ -111,6 +118,5 @@ fn line_process(
             }
         }
     }
-    //println!("Thread finished with:\n{:#?}", &data);
     return data;
 }

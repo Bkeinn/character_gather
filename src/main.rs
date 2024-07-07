@@ -1,51 +1,180 @@
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use gather::gather_characters;
-use hdf5::File;
+use hdf5::{
+    self,
+    types::{VarLenArray, VarLenAscii},
+};
+use ndarray::{Array1, Array3, ArrayBase, Dim, OwnedRepr};
+use normalize::normalizer_sum_one;
 use std::fs::File as StdFile;
 mod gather;
+mod normalize;
 mod threading;
 
-#[derive(Parser, Debug)]
+#[derive(Parser)]
 #[command(name = "Character Gather")]
-#[command(version = "0.0.1")]
+#[command(version = "0.0.2")]
 #[command(about = "Takes in text files and analyses how often character appear after each other", long_about = None)]
 struct Args {
-    #[clap(short, long, value_parser, num_args = 1.., value_delimiter = ',')]
-    acceptable_types: Vec<char>,
-    #[arg(long, default_value_t = 4)]
-    offset_back: isize,
-    #[arg(long, default_value_t = 4)]
-    offset_front: isize,
-    #[arg(short)]
-    input: String,
-    #[arg(short)]
-    output: String,
+    #[command(subcommand)]
+    command: Option<Commands>,
+    // #[arg(long)]
+    // normalize: Option<bool>,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    Gather {
+        #[clap(short, long, value_parser, num_args = 1.., value_delimiter = ',')]
+        acceptable_types: Vec<char>,
+        #[arg(long, default_value_t = 4)]
+        offset_back: isize,
+        #[arg(long, default_value_t = 4)]
+        offset_front: isize,
+        #[arg(short)]
+        input: String,
+        #[arg(short)]
+        output: String,
+    },
+    Normalize {
+        #[arg(short)]
+        input: String,
+        #[arg(
+            long,
+            default_value_t = 0,
+            help = "Set the normalization type:\n\t0: Value = (X - min)/(max - min)\n\t1: Value = X/sum"
+        )]
+        n_type: u8,
+    },
 }
 
 fn main() -> hdf5::Result<()> {
     let args = Args::parse();
-    let file = StdFile::open(args.input).expect("Could not open input file");
 
-    println!("Accepted types are:\n{:?}", args.acceptable_types);
+    match args.command {
+        Some(Commands::Gather {
+            acceptable_types,
+            offset_back,
+            offset_front,
+            input,
+            output,
+        }) => {
+            let file = StdFile::open(input).expect("Could not open input file");
 
-    let hdf5_file = File::create(args.output).expect("Could not create file");
-    let dataset = hdf5_file
-        .new_dataset::<u64>()
-        .shape((
-            args.acceptable_types.len(),
-            args.acceptable_types.len(),
-            args.offset_back as usize + args.offset_front as usize + 1,
-        ))
-        .create("results")
-        .expect("could not create base");
+            let hdf5_file = hdf5::File::create(output).expect("Could not create file");
+            let dataset = hdf5_file
+                .new_dataset::<u64>()
+                .shape((
+                    acceptable_types.len(),
+                    acceptable_types.len(),
+                    offset_back as usize + offset_front as usize + 1,
+                ))
+                .create("absolute_data")
+                .expect("could not create base");
 
-    let data = gather_characters(
-        args.acceptable_types,
-        args.offset_back,
-        args.offset_front,
-        file,
-    );
+            dataset
+                .new_attr::<VarLenAscii>()
+                .shape(())
+                .create("acceptable_types")?
+                .write_scalar(
+                    &VarLenAscii::from_ascii(&acceptable_types.iter().collect::<String>()).unwrap(),
+                )
+                .expect("Could not create acceptable types attribute");
+            let data = gather_characters(acceptable_types, offset_back, offset_front, file);
+            dataset.write(&data).expect("Could not write the fiel");
+            dataset
+                .new_attr::<u64>()
+                .shape(())
+                .create("offset_back")?
+                .write_scalar(&offset_back)
+                .expect("Could not create offset_back attribute");
+            dataset
+                .new_attr::<u64>()
+                .shape(())
+                .create("offset_front")?
+                .write_scalar(&offset_front)
+                .expect("Could not create offset_front attribute");
+        }
+        Some(Commands::Normalize { input, n_type }) => {
+            let hdf5_file = hdf5::File::open_as(input, hdf5::file::OpenMode::ReadWrite)
+                .expect("Could not find file {input}");
+            let absolute_dataset = match hdf5_file.dataset("/absolute_data/") {
+                Ok(dataset) => dataset,
+                Err(e) => match hdf5_file.dataset("/result/") {
+                    Ok(dataset) => dataset,
+                    Err(oe) => panic!("Could not find the dataset in this file: {e} | {oe}"),
+                },
+            };
+            let offset_front: u64 = absolute_dataset.attr("offset_front")?.read_scalar()?;
+            let offset_back: u64 = absolute_dataset.attr("offset_back")?.read_scalar()?;
+            let acceptable_types: VarLenAscii =
+                absolute_dataset.attr("acceptable_types")?.read_scalar()?;
+            let acceptable_types = acceptable_types
+                .as_bytes()
+                .iter()
+                .map(|c| *c as char)
+                .collect::<Vec<char>>();
 
-    dataset.write(&data).expect("Could not write the fiel");
+            let data: Array3<u64> = absolute_dataset.read()?;
+            let normalized_data = match n_type {
+                0 => normalize::normalizer_min_max(data),
+                1 => normalize::normalizer_sum_one(data),
+                _ => panic!("No such normalizer implemented"),
+            };
+
+            let normalized_dataset = match hdf5_file
+                .new_dataset::<f64>()
+                .shape((
+                    acceptable_types.len(),
+                    acceptable_types.len(),
+                    offset_back as usize + offset_front as usize + 1,
+                ))
+                .create("normalized_data")
+            {
+                Ok(dataset) => dataset,
+                Err(_) => hdf5_file
+                    .dataset("/normalized_data/")
+                    .expect("Could not open normalized_data"),
+            };
+            normalized_dataset
+                .write(&normalized_data)
+                .expect("Could not write data to dataset");
+
+            let attr = match normalized_dataset
+                .new_attr::<VarLenAscii>()
+                .shape(())
+                .create("acceptable_types")
+            {
+                Ok(attr) => attr,
+                Err(_) => normalized_dataset.attr("acceptable_types")?,
+            };
+            attr.write_scalar(
+                &VarLenAscii::from_ascii(&acceptable_types.iter().collect::<String>()).unwrap(),
+            )?;
+
+            let attr = match normalized_dataset
+                .new_attr::<u64>()
+                .shape(())
+                .create("offset_back")
+            {
+                Ok(attr) => attr,
+                Err(_) => normalized_dataset.attr("offset_back")?,
+            };
+            attr.write_scalar(&offset_back)
+                .expect("Could not create offset_back attribute");
+            let attr = match normalized_dataset
+                .new_attr::<u64>()
+                .shape(())
+                .create("offset_front")
+            {
+                Ok(attr) => attr,
+                Err(_) => normalized_dataset.attr("offset_front")?,
+            };
+            attr.write_scalar(&offset_front)
+                .expect("Could not create offset_front attribute");
+        }
+        None => eprint!("No command given, so nothing will happen"),
+    }
+
     Ok(())
 }

@@ -5,8 +5,7 @@ use std::io::{self, Read, Seek, SeekFrom};
 use std::sync::{mpsc, Arc};
 use std::thread;
 
-const BUFFERMAX: usize = 4096 * 4;
-const CHUNKSIZE: usize = 4096;
+const CHUNKSIZE: usize = 4096 * 4;
 
 pub fn gather_characters(
     acceptable_types: Vec<char>,

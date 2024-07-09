@@ -12,6 +12,7 @@ pub fn gather_characters(
     offset_back: isize,
     offset_front: isize,
     file: File,
+    threads: usize,
 ) -> Array3<u64> {
     let file_size = file.metadata().expect("Could not read file metadata").len();
     let num_chunks = (file_size as usize + CHUNKSIZE + 1) / CHUNKSIZE;
@@ -32,38 +33,49 @@ pub fn gather_characters(
         offset_back as usize + offset_front as usize + 1,
     ));
 
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(threads)
+        .build()
+        .expect("Could not build thread pool builder");
+
     let thread_spawner = thread::spawn(move || {
-        for i in 0..num_chunks {
-            let mut file = Arc::clone(&file);
-            let tx = tx.clone();
+        pool.scope(|s| {
+            for i in 0..num_chunks {
+                let mut file = Arc::clone(&file);
+                let tx = tx.clone();
 
-            print!("At {i} out of {num_chunks}\r");
+                let index_map = Arc::clone(&index_map);
+                let acceptable_types = Arc::clone(&acceptable_types);
+                s.spawn(move |_| {
+                    // print!("At {i} out of {num_chunks}\r");
+                    let mut chunk = vec![0; CHUNKSIZE.min(file_size as usize - i * CHUNKSIZE)];
 
-            let index_map = Arc::clone(&index_map);
-            let acceptable_types = Arc::clone(&acceptable_types);
-            thread::spawn(move || {
-                let mut chunk = vec![0; CHUNKSIZE.min(file_size as usize - i * CHUNKSIZE)];
+                    file.seek(SeekFrom::Start((i * CHUNKSIZE) as u64)).unwrap();
+                    let _amount = file.read(&mut chunk).unwrap();
+                    let chunk = chunk.iter().map(|c| *c as char).collect();
 
-                file.seek(SeekFrom::Start((i * CHUNKSIZE) as u64)).unwrap();
-                let _amount = file.read(&mut chunk).unwrap();
-                let chunk = chunk.iter().map(|c| *c as char).collect();
-
-                tx.send(line_process(
-                    &chunk,
-                    &acceptable_types,
-                    offset_back,
-                    offset_front,
-                    &index_map,
-                ))
-                .unwrap();
-            });
-        }
+                    tx.send(line_process(
+                        &chunk,
+                        &acceptable_types,
+                        offset_back,
+                        offset_front,
+                        &index_map,
+                    ))
+                    .unwrap();
+                });
+            }
+        });
     });
 
-    // drop(tx);
-
+    let mut counter: f32 = 0.0;
+    let num_chunks = num_chunks as f32;
     for received in rx {
         final_sum += &received;
+        counter += 1.0;
+        print!(
+            "At {counter} out of {num_chunks} = {:.1}%\r",
+            (counter / num_chunks) * 100.0
+        );
     }
     thread_spawner.join().unwrap();
     return final_sum;

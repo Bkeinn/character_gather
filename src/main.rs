@@ -35,6 +35,8 @@ enum Commands {
         input: String,
         #[arg(short)]
         output: String,
+        #[arg(short)]
+        threads: usize,
     },
     Normalize {
         #[arg(short)]
@@ -58,6 +60,7 @@ fn main() -> hdf5::Result<()> {
             offset_front,
             input,
             output,
+            threads,
         }) => {
             let file = StdFile::open(input).expect("Could not open input file");
 
@@ -80,7 +83,8 @@ fn main() -> hdf5::Result<()> {
                     &VarLenAscii::from_ascii(&acceptable_types.iter().collect::<String>()).unwrap(),
                 )
                 .expect("Could not create acceptable types attribute");
-            let data = gather_characters(acceptable_types, offset_back, offset_front, file);
+            let data =
+                gather_characters(acceptable_types, offset_back, offset_front, file, threads);
             dataset.write(&data).expect("Could not write the fiel");
             dataset
                 .new_attr::<u64>()
@@ -100,7 +104,7 @@ fn main() -> hdf5::Result<()> {
                 .expect("Could not find file {input}");
             let absolute_dataset = match hdf5_file.dataset("/absolute_data/") {
                 Ok(dataset) => dataset,
-                Err(e) => match hdf5_file.dataset("/result/") {
+                Err(e) => match hdf5_file.dataset("/results/") {
                     Ok(dataset) => dataset,
                     Err(oe) => panic!("Could not find the dataset in this file: {e} | {oe}"),
                 },

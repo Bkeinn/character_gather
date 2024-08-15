@@ -7,10 +7,13 @@ use hdf5::{
 use ndarray::{Array2, Array3, ArrayBase, Dim, OwnedRepr};
 use normalize::normalizer_sum_one;
 use std::fs::File as StdFile;
+mod char_dataset;
 mod gather;
 mod normalize;
 mod threading;
-mod char_dataset;
+
+use std::fs::OpenOptions;
+use std::io::Write;
 
 #[derive(Parser)]
 #[command(name = "Character Gather")]
@@ -62,8 +65,7 @@ enum Commands {
         output: String,
         #[arg(short)]
         threads: usize,
-    }
-
+    },
 }
 
 fn main() -> hdf5::Result<()> {
@@ -209,17 +211,41 @@ fn main() -> hdf5::Result<()> {
             let hdf5_file = hdf5::File::create(output).expect("Could not create file");
 
             for character in acceptable_types.clone() {
-                let name = format!("CharDataset_{}", &character);
-                let data: Vec<Vec<u8>> = char_dataset::gather_dataset(character, acceptable_types.clone(), offset_back, offset_front, file.try_clone().unwrap(), threads)
-                    .into_iter()
-                    .map(|vec| vec.into_iter().map(|c| c as u8).collect::<Vec<u8>>())
-                    .collect();
-                let dims = (data.len(), data[0].len());
-                let data: Array2<u8> = Array2::from_shape_vec(dims, data.into_iter().flatten().collect()).unwrap();
+                let name = format!("CharDataset_{}.csv", &character);
+                let result_file = StdFile::create(&name).expect("Could not create File");
+                let mut result_file = OpenOptions::new().append(true).open(name).unwrap();
 
-                let dataset = hdf5_file
-                    .new_dataset::<u8>().shape(dims).create(&*name).unwrap();
-                dataset.write(&data).unwrap();
+                char_dataset::gather_dataset(
+                    character,
+                    acceptable_types.clone(),
+                    offset_back,
+                    offset_front,
+                    file.try_clone().unwrap(),
+                    threads,
+                    result_file,
+                );
+
+                // let data: Vec<Vec<u8>> = char_dataset::gather_dataset(
+                //     character,
+                //     acceptable_types.clone(),
+                //     offset_back,
+                //     offset_front,
+                //     file.try_clone().unwrap(),
+                //     threads,
+                // )
+                // .into_iter()
+                // .map(|vec| vec.into_iter().map(|c| c as u8).collect::<Vec<u8>>())
+                // .collect();
+                // let dims = (data.len(), data[0].len());
+                // let data: Array2<u8> =
+                //     Array2::from_shape_vec(dims, data.into_iter().flatten().collect()).unwrap();
+
+                // let dataset = hdf5_file
+                //     .new_dataset::<u8>()
+                //     .shape(dims)
+                //     .create(&*name)
+                //     .unwrap();
+                // dataset.write(&data).unwrap();
             }
 
             let dataset = hdf5_file

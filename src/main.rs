@@ -11,6 +11,7 @@ mod char_dataset;
 mod gather;
 mod normalize;
 mod threading;
+use std::sync::{mpsc, Arc};
 
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -208,79 +209,34 @@ fn main() -> hdf5::Result<()> {
         }) => {
             let file = StdFile::open(input).expect("Could not open input file");
 
-            let hdf5_file = hdf5::File::create(output).expect("Could not create file");
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .expect("Could not build thread builder");
 
-            for character in acceptable_types.clone() {
-                let name = format!("CharDataset_{}.csv", &character);
-                let result_file = StdFile::create(&name).expect("Could not create File");
-                let mut result_file = OpenOptions::new().append(true).open(name).unwrap();
+            let iter_acceptable_types = acceptable_types.clone();
+            let acceptable_types = Arc::new(acceptable_types);
+            let file = Arc::new(file);
 
-                char_dataset::gather_dataset(
-                    character,
-                    acceptable_types.clone(),
-                    offset_back,
-                    offset_front,
-                    file.try_clone().unwrap(),
-                    threads,
-                    result_file,
-                );
-
-                // let data: Vec<Vec<u8>> = char_dataset::gather_dataset(
-                //     character,
-                //     acceptable_types.clone(),
-                //     offset_back,
-                //     offset_front,
-                //     file.try_clone().unwrap(),
-                //     threads,
-                // )
-                // .into_iter()
-                // .map(|vec| vec.into_iter().map(|c| c as u8).collect::<Vec<u8>>())
-                // .collect();
-                // let dims = (data.len(), data[0].len());
-                // let data: Array2<u8> =
-                //     Array2::from_shape_vec(dims, data.into_iter().flatten().collect()).unwrap();
-
-                // let dataset = hdf5_file
-                //     .new_dataset::<u8>()
-                //     .shape(dims)
-                //     .create(&*name)
-                //     .unwrap();
-                // dataset.write(&data).unwrap();
-            }
-
-            let dataset = hdf5_file
-                .new_dataset::<u64>()
-                .shape((
-                    acceptable_types.len(),
-                    acceptable_types.len(),
-                    offset_back as usize + offset_front as usize + 1,
-                ))
-                .create("absolute_data")
-                .expect("could not create base");
-
-            dataset
-                .new_attr::<VarLenAscii>()
-                .shape(())
-                .create("acceptable_types")?
-                .write_scalar(
-                    &VarLenAscii::from_ascii(&acceptable_types.iter().collect::<String>()).unwrap(),
-                )
-                .expect("Could not create acceptable types attribute");
-            let data =
-                gather_characters(acceptable_types, offset_back, offset_front, file, threads);
-            dataset.write(&data).expect("Could not write the fiel");
-            dataset
-                .new_attr::<u64>()
-                .shape(())
-                .create("offset_back")?
-                .write_scalar(&offset_back)
-                .expect("Could not create offset_back attribute");
-            dataset
-                .new_attr::<u64>()
-                .shape(())
-                .create("offset_front")?
-                .write_scalar(&offset_front)
-                .expect("Could not create offset_front attribute");
+            pool.scope(|s| {
+                for character in iter_acceptable_types {
+                    let name = format!("{}_{}.csv", &output, &character);
+                    let result_file = StdFile::create(&name).expect("Could not create File");
+                    let mut result_file = OpenOptions::new().append(true).open(name).unwrap();
+                    let file = Arc::clone(&file);
+                    let acceptable_types = Arc::clone(&acceptable_types);
+                    s.spawn(move |_| {
+                        char_dataset::gather_dataset(
+                            character,
+                            acceptable_types,
+                            offset_back,
+                            offset_front,
+                            file.try_clone().unwrap(),
+                            result_file,
+                        );
+                    })
+                }
+            });
         }
         None => eprint!("No command given, so nothing will happen"),
     }

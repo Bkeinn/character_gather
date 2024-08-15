@@ -1,6 +1,4 @@
-use ndarray::{s, Array2};
 use std::fs::File;
-use std::fs::OpenOptions;
 use std::io::Write;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::sync::{mpsc, Arc};
@@ -10,54 +8,44 @@ const CHUNKSIZE: usize = 4096 * 4;
 
 pub fn gather_dataset(
     search_char: char,
-    acceptable_types: Vec<char>,
+    acceptable_types: Arc<Vec<char>>,
     offset_back: isize,
     offset_front: isize,
-    file: File,
-    threads: usize,
+    mut file: File,
     mut result_file: File,
 )
 // -> Vec<Vec<char>>
 {
     let file_size = file.metadata().expect("Could not read file metadata").len();
     let num_chunks = (file_size as usize + CHUNKSIZE + 1) / CHUNKSIZE;
-    let file = Arc::new(file);
-    let search_char = Arc::new(search_char);
-    let acceptable_types = Arc::new(acceptable_types);
+    // let file = Arc::new(file);
+    // let search_char = Arc::new(search_char);
+    // let acceptable_types = Arc::new(acceptable_types);
     let (tx, rx) = mpsc::channel();
 
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(threads)
-        .build()
-        .expect("Could not build thread pool builder");
+    let workthread = thread::spawn(move || {
+        for i in 0..num_chunks {
+            // let mut file = Arc::clone(&file);
+            let tx = tx.clone();
+            // let search_char = Arc::clone(&search_char);
+            // let acceptable_types = Arc::clone(&acceptable_types);
+            let mut chunk = vec![0; CHUNKSIZE.min(file_size as usize - i * CHUNKSIZE)];
 
-    let thread_spawner = thread::spawn(move || {
-        pool.scope(|s| {
-            for i in 0..num_chunks {
-                let mut file = Arc::clone(&file);
-                let tx = tx.clone();
-                let search_char = Arc::clone(&search_char);
-                let acceptable_types = Arc::clone(&acceptable_types);
-                s.spawn(move |_| {
-                    let mut chunk = vec![0; CHUNKSIZE.min(file_size as usize - i * CHUNKSIZE)];
+            file.seek(SeekFrom::Start((i * CHUNKSIZE) as u64)).unwrap();
+            let _amount = file
+                .read(&mut chunk)
+                .expect(&format!("Could not open file {:?}", file));
+            let chunk = chunk.iter().map(|c| *c as char).collect();
 
-                    file.seek(SeekFrom::Start((i * CHUNKSIZE) as u64)).unwrap();
-                    let _amount = file
-                        .read(&mut chunk)
-                        .expect(&format!("Could not open file {:?}", file));
-                    let chunk = chunk.iter().map(|c| *c as char).collect();
-
-                    tx.send(chunk_process(
-                        &chunk,
-                        &acceptable_types,
-                        offset_back,
-                        offset_front,
-                        &search_char,
-                    ))
-                    .unwrap();
-                });
-            }
-        });
+            tx.send(chunk_process(
+                &chunk,
+                &acceptable_types,
+                offset_back,
+                offset_front,
+                &search_char,
+            ))
+            .unwrap();
+        }
     });
 
     let mut counter: f32 = 0.0;
@@ -70,7 +58,7 @@ pub fn gather_dataset(
             (counter / num_chunks) * 100.0
         );
     }
-    thread_spawner.join().unwrap();
+    workthread.join().unwrap();
 }
 
 fn append_to_csv(file: &mut File, data: Vec<Vec<char>>) -> std::io::Result<()> {
@@ -93,7 +81,7 @@ fn append_to_csv(file: &mut File, data: Vec<Vec<char>>) -> std::io::Result<()> {
 
 fn chunk_process(
     buffer: &Vec<char>,
-    acceptable: &Arc<Vec<char>>,
+    acceptable: &Vec<char>,
     offset_back: isize,
     offset_front: isize,
     search_char: &char,
@@ -116,7 +104,7 @@ fn chunk_process(
     return data;
 }
 
-fn validate_vec(vector: &Vec<char>, acceptable: &Arc<Vec<char>>) -> bool {
+fn validate_vec(vector: &Vec<char>, acceptable: &Vec<char>) -> bool {
     for character in vector {
         if !acceptable.contains(character) {
             return false;
